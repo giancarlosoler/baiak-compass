@@ -357,7 +357,7 @@ let draggedBossIndex=null;
 function bossKey(b){return String(b?.id||norm(b?.name||''))}
 async function saveBossQueue(){await chrome.storage.local.set({bossOwnQueue:bossQueue})}
 function queueHas(b){const k=bossKey(b);return bossQueue.some(x=>bossKey(x)===k)}
-function bossResultLabel(v){return ({pending:'Pendiente',running:'En combate',completed:'Completado',already_completed:'Ya completado',cooldown:'Cooldown',level_warning:'Nivel bajo',rejected:'Rechazado',error:'Error',defeat:'Derrota',skipped:'Omitido'})[v]||'Pendiente'}
+function bossResultLabel(v){return ({pending:'Pendiente',running:'En combate',completed:'Completado',already_completed:'Ya completado',cooldown:'Cooldown',level_warning:'Nivel bajo',rejected:'Rechazado',error:'Error',defeat:'Derrota',unverified:'Sin verificar',skipped:'Omitido'})[v]||'Pendiente'}
 function compactBossCharges(value){const text=String(value||'').trim();const match=text.match(/(\d+)\s*\/\s*(\d+)/);return match?`${match[1]}/${match[2]}`:(text||'—');}
 function renderBosses(){
  const snap=bossSnapshot||{bosses:[],run:{}};
@@ -392,14 +392,17 @@ function renderBosses(){
        else if(live.ready)dispStatus='pending';
      }
    }
-   return `<div class="boss-queue-item" draggable="true" data-queue-index="${i}"><span>${i+1}</span><div><b>${esc(b.name)}</b><small>${bossCategoryLabel(b.category)} · <em class="boss-result-${esc(dispStatus)}">${bossResultLabel(dispStatus)}</em></small></div><div class="queue-controls"><button class="boss-move" data-up="${i}" title="Subir">↑</button><button class="boss-move" data-down="${i}" title="Bajar">↓</button><button class="boss-remove" data-remove="${i}" title="Quitar">✕</button></div></div>`;
+    const health=b.health||{};
+    const hpPct=Number.isFinite(Number(health.percent))?Math.max(0,Math.min(100,Number(health.percent))):null;
+    const hpText=hpPct!==null?(health.current!==null&&health.current!==undefined&&health.max?`Vida: ${fmtFull(health.current)} / ${fmtFull(health.max)} (${Math.round(hpPct)}%)`:`Vida del boss: ${Math.round(hpPct)}%`):(dispStatus==='running'?'Leyendo vida real del juego…':'Vida disponible al iniciar el combate');
+    return `<div class="boss-queue-item" draggable="true" data-queue-index="${i}"><span>${i+1}</span><div class="boss-queue-copy"><b>${esc(b.name)}</b><small>${bossCategoryLabel(b.category)} · <em class="boss-result-${esc(dispStatus)}">${bossResultLabel(dispStatus)}</em></small></div><div class="queue-controls"><button class="boss-move" data-up="${i}" title="Subir">↑</button><button class="boss-move" data-down="${i}" title="Bajar">↓</button><button class="boss-remove" data-remove="${i}" title="Quitar">✕</button></div><div class="boss-queue-health ${hpPct!==null?'known':'waiting'}"><i style="width:${hpPct??0}%"></i></div><small class="boss-queue-health-label">${esc(hpText)}</small></div>`;
  }).join('')||'Agrega bosses desde el panel izquierdo.';
  document.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{bossQueue.splice(Number(b.dataset.remove),1);await saveBossQueue();renderBosses()});
  document.querySelectorAll('[data-up]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.up);if(i>0){[bossQueue[i-1],bossQueue[i]]=[bossQueue[i],bossQueue[i-1]];await saveBossQueue();renderBosses()}});
  document.querySelectorAll('[data-down]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.down);if(i<bossQueue.length-1){[bossQueue[i+1],bossQueue[i]]=[bossQueue[i],bossQueue[i+1]];await saveBossQueue();renderBosses()}});
  document.querySelectorAll('[data-queue-index]').forEach(row=>{row.ondragstart=()=>{draggedBossIndex=Number(row.dataset.queueIndex);row.classList.add('dragging')};row.ondragend=()=>row.classList.remove('dragging');row.ondragover=e=>e.preventDefault();row.ondrop=async e=>{e.preventDefault();const to=Number(row.dataset.queueIndex);if(draggedBossIndex==null||draggedBossIndex===to)return;const [item]=bossQueue.splice(draggedBossIndex,1);bossQueue.splice(to,0,item);draggedBossIndex=null;await saveBossQueue();renderBosses()}});
 }
-async function loadBosses(open=false){try{$('bossMessage').textContent=open?'Abriendo panel de bosses...':'Leyendo bosses...';const r=await message({type:open?'BAIAK_BOSS_OPEN':'BAIAK_BOSS_STATUS',force:open});if(!r.ok)throw Error(r.error);bossSnapshot=r.result;const st=await chrome.storage.local.get({bossOwnQueue:[],dailyBossAutoStart:true});bossQueue=Array.isArray(st.bossOwnQueue)?st.bossOwnQueue:[];
+async function loadBosses(open=false){try{$('bossMessage').textContent=open?'Abriendo panel de bosses...':'Leyendo bosses...';const r=await message({type:open?'BAIAK_BOSS_OPEN':'BAIAK_BOSS_STATUS',force:open});if(!r.ok)throw Error(r.error);bossSnapshot=r.result;const currentContentScript=!!r.result.contentScriptVersion;const st=await chrome.storage.local.get({bossOwnQueue:[],dailyBossAutoStart:true});bossQueue=Array.isArray(st.bossOwnQueue)?st.bossOwnQueue:[];
   // Solo se refleja la cola "en vivo" del content script mientras hay una corrida activa
   // (running/paused): esa cola queda pegada en memoria del content script aun después de
   // terminar, y si se adopta siempre, pisa cualquier cosa que el usuario acaba de limpiar
@@ -411,7 +414,7 @@ async function loadBosses(open=false){try{$('bossMessage').textContent=open?'Abr
   // (qué boss se saltó por cooldown, resumen final, etc.) tiene prioridad sobre el genérico.
   const runState=r.result.run?.state,runMessage=r.result.run?.message;
   const showRunMessage=runMessage&&['running','paused','finished','stopped'].includes(runState);
-  $('bossMessage').textContent=showRunMessage?runMessage:(r.result.bosses?.length?'Bosses actualizados automáticamente.':'No se pudo cargar la lista de bosses.');
+  $('bossMessage').textContent=!currentContentScript?'Actualización instalada: recargá la pestaña de Baiak Idle (Ctrl+R) antes de iniciar Auto Boss.':(showRunMessage?runMessage:(r.result.bosses?.length?'Bosses actualizados automáticamente.':'No se pudo cargar la lista de bosses.'));
 }catch(e){$('bossMessage').textContent=e.message}}
 const bossMatchKey=s=>norm(s).replace(/[‘’ʼ‛]/g,"'");
 async function addBossesFromBulkText(){
@@ -435,7 +438,7 @@ async function addBossesFromBulkText(){
  $('bossBulkResult').textContent=parts.join(' · ')||'Nada para agregar.';
  if(added)$('bossBulkInput').value='';
 }
-async function startBosses(){try{if(!bossQueue.length)throw Error('Agrega al menos un boss a la lista.');bossQueue=bossQueue.map(b=>({...b,status:'pending'}));await saveBossQueue();$('bossMessage').textContent='Iniciando Auto Boss...';const r=await message({type:'BAIAK_BOSS_START_OWN',queue:bossQueue});if(!r.ok)throw Error(r.error);$('bossMessage').textContent=r.message||'Auto Boss iniciado.';setTimeout(()=>loadBosses(false),700)}catch(e){$('bossMessage').textContent=e.message}}
+async function startBosses(){try{if(!bossQueue.length)throw Error('Agrega al menos un boss a la lista.');bossQueue=bossQueue.map(({health,...b})=>({...b,status:'pending'}));await saveBossQueue();$('bossMessage').textContent='Iniciando Auto Boss...';const r=await message({type:'BAIAK_BOSS_START_OWN',queue:bossQueue});if(!r.ok)throw Error(r.error);$('bossMessage').textContent=r.message||'Auto Boss iniciado.';setTimeout(()=>loadBosses(false),700)}catch(e){$('bossMessage').textContent=e.message}}
 async function bossControl(type,label){try{const r=await message({type});if(!r.ok)throw Error(r.error);$('bossMessage').textContent=r.message||label;setTimeout(()=>loadBosses(false),300)}catch(e){$('bossMessage').textContent=e.message}}
 function renderAuto(){['enterAt','returnAt','intervalSeconds','returnMode','minImprovement'].forEach(id=>{const el=$(id);if(el&&document.activeElement!==el)el.value=data?.[id]??DEFAULTS[id]});if(document.activeElement!==$('staminaEnabled'))$('staminaEnabled').checked=!!data?.staminaEnabled;$('status').textContent=data?.lastStatus||'—'}
 async function refreshStorage(){data=await chrome.storage.local.get(DEFAULTS);if(data?.lastAnalysis?.ranked){data.lastAnalysis.ranked=data.lastAnalysis.ranked.map(row=>withHuntImage(row));}applyLanguage();renderAdvisor();renderMeasurement();renderAuto()}

@@ -1,6 +1,7 @@
 if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
   globalThis.__BAIAK_ANALYZER_LOADED__ = true;
 (() => {
+  const CONTENT_SCRIPT_VERSION='0.8.0-boss-hp';
   const DEFAULTS = {
     staminaEnabled: false,
     enterAt: 20,
@@ -978,6 +979,8 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
   let ownBossRun={state:'idle',index:0,total:0,current:'',queue:[],stop:false,pause:false,message:'',startedAt:0};
   let bossCache={bosses:[],charges:'',updatedAt:0};
   let bossRefreshPromise=null;
+  let bossHealthReadError='';
+  let bossHealthReadInfo='';
 
   function canvasHasPixels(canvas){
     try{
@@ -1014,18 +1017,11 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     const category=['bane','archfoe','nemesis'].find(c=>el?.classList.contains(c))||'boss';
     const titleState=[rawTitle,status,el?.className||''].join(' ');
     const levelWarning=/level|nivel/i.test(titleState);
-    // Señal verificada contra el juego real (versión original de la extensión): el juego le
-    // pone la clase CSS ".locked" a la tarjeta específicamente cuando está en cooldown — a
-    // diferencia de "disabled"/"aria-disabled", que también se activa mientras el boss está
-    // EN COMBATE (pelea en curso). Solo se lee el temporizador ("22h 22m", "04:12:33"...)
-    // cuando ".locked" ya confirma que es un cooldown real, nunca al revés.
-    const locked=!!el&&el.classList.contains('locked');
-    const timerLike=locked&&/\b\d{1,2}:\d{2}(:\d{2})?\b|\d+[hms]/i.test(cellText);
+    const cooldown=/cooldown|\bcd\b|reset|already|done|killed today|defeated today|ja feito|já feito|realizado/i.test(titleState)||el?.classList.contains('locked')&&/\d+[hms]/i.test(status);
+    const completed=cooldown||/completed|conclu|derrotad|finaliz/i.test(titleState);
     const disabled=!!el&&(el.classList.contains('disabled')||el.getAttribute('aria-disabled')==='true');
-    const completed=/completed|conclu|derrotad|finaliz/i.test(titleState);
-    const cooldown=!completed&&(/cooldown|\bcd\b|reset|already|done|killed today|defeated today|ja feito|já feito|realizado/i.test(titleState)||timerLike);
     const ready=!disabled&&!completed&&!cooldown;
-    return{id:el?.dataset?.id||bossSlug(title),name:title,category,status:status||(completed?'Completado':cooldown?'Cooldown':''),ready,levelWarning,completed,cooldown,image:bossImageData(el)};
+    return{id:el?.dataset?.id||bossSlug(title),name:title,category,status:status||(cooldown?'Cooldown':''),ready,levelWarning,completed,cooldown,image:bossImageData(el)};
   }
   function readBossSnapshot(){
     const body=document.querySelector('#boss-modal-body');
@@ -1045,7 +1041,7 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
       chrome.storage.local.set({bossCatalogCache:bossCache}).catch(()=>{});
     }
     const source=bossCache;
-    return{modalOpen:bossModalVisible(),charges:source.charges||'',bosses:source.bosses||[],cacheUpdatedAt:bossCache.updatedAt||0,queue:ownBossRun.queue||[],running:ownBossRun.state==='running',run:{state:ownBossRun.state,index:ownBossRun.index,total:ownBossRun.total,current:ownBossRun.current,message:ownBossRun.message,queue:ownBossRun.queue||[]}};
+    return{contentScriptVersion:CONTENT_SCRIPT_VERSION,modalOpen:bossModalVisible(),charges:source.charges||'',bosses:source.bosses||[],cacheUpdatedAt:bossCache.updatedAt||0,queue:ownBossRun.queue||[],running:ownBossRun.state==='running',run:{state:ownBossRun.state,index:ownBossRun.index,total:ownBossRun.total,current:ownBossRun.current,message:ownBossRun.message,queue:ownBossRun.queue||[]}};
   }
   const wait=ms=>new Promise(r=>setTimeout(r,ms));
 
@@ -1161,12 +1157,145 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     throw Error('No se encontró el boss en el panel del juego.');
   }
 
-  function visibleButtons(){return [...document.querySelectorAll('button,[role="button"],a')].filter(el=>{const r=el.getBoundingClientRect();const st=getComputedStyle(el);return r.width>0&&r.height>0&&st.display!=='none'&&st.visibility!=='hidden'&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'});}
-  function findNormalBossAction(){
-    const excluded=/auto\s*boss|playlist|add|remove|close|fechar|cerrar|cancel|voltar|back/i;
-    const wanted=/fight|battle|enter|start|challenge|attack|lutar|combater|entrar|iniciar|desafiar|atacar|pelear|combatir/i;
-    const scoped=[...document.querySelectorAll('#boss-modal button,#boss-modal [role="button"],#boss-modal a')].filter(el=>{const t=(el.textContent||el.getAttribute('title')||el.getAttribute('data-tip')||'').trim();return wanted.test(t)&&!excluded.test(t)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'});
-    return scoped[0]||visibleButtons().find(el=>{const t=(el.textContent||el.getAttribute('title')||el.getAttribute('data-tip')||'').trim();return wanted.test(t)&&!excluded.test(t)});
+  // The fight HUD changes between game versions, so this reads both numeric HP
+  // and the width of a real, visible health bar instead of relying on one ID.
+  function bossHpNumber(value){const digits=String(value??'').replace(/[^0-9]/g,'');return digits?Number(digits):null;}
+  function bossHealthFromBar(bar){
+    if(!bar)return null;
+    const textParts=[bar.textContent,bar.getAttribute('data-tip'),bar.getAttribute('title'),bar.getAttribute('aria-label'),bar.getAttribute('data-hp'),bar.getAttribute('data-health')].filter(Boolean).join(' ');
+    const pair=textParts.match(/(\d[\d.,\s]*)\s*\/\s*(\d[\d.,\s]*)/);
+    const fill=bar.querySelector('i,[role="progressbar"],.fill,.bar-fill,.health-fill,.hp-fill');
+    const rawPercent=fill?.style?.width||bar.getAttribute('aria-valuenow')||bar.dataset?.percent||bar.dataset?.hpPercent||'';
+    const percentMatch=String(rawPercent).match(/([\d.]+)\s*%?/);
+    const current=pair?bossHpNumber(pair[1]):bossHpNumber(bar.getAttribute('data-current')||bar.dataset?.currentHp||bar.dataset?.hp);
+    const max=pair?bossHpNumber(pair[2]):bossHpNumber(bar.getAttribute('data-max')||bar.dataset?.maxHp||bar.dataset?.maxHealth);
+    const percent=max?Math.max(0,Math.min(100,(current||0)*100/max)):(percentMatch?Math.max(0,Math.min(100,Number(percentMatch[1]))):null);
+    return current===null&&percent===null?null:{current,max,percent,text:textParts.replace(/\s+/g,' ').trim()};
+  }
+  function visibleBossNode(el){
+    if(!el||el.closest('#boss-modal,#panel-party,#party-list'))return false;
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';
+  }
+  function readBossCombatHealth(item){
+    const wanted=bossNorm(item?.name);
+    const roots=[...document.querySelectorAll('[data-boss-id],[data-boss-name],[data-enemy-id],[data-enemy-name],[id*="boss" i],[class*="boss" i],[id*="enemy" i],[class*="enemy" i],[id*="monster" i],[class*="monster" i],[id*="combat" i],[class*="combat" i],[id*="battle" i],[class*="battle" i]')].filter(visibleBossNode);
+    const matches=[];
+    for(const root of roots){
+      const rootText=bossNorm([root.dataset?.bossName,root.dataset?.enemyName,root.getAttribute('aria-label'),root.getAttribute('title'),root.textContent].filter(Boolean).join(' '));
+      const identifiesBoss=wanted&&rootText.includes(wanted);
+      const isCombatHud=/boss|enemy|monster|combat|battle/i.test(`${root.id} ${root.className}`);
+      if(!identifiesBoss&&!isCombatHud)continue;
+      for(const bar of root.querySelectorAll('[data-hp],[data-health],[data-current-hp],[aria-valuenow],.boss-hp,.enemy-hp,.monster-hp,.health-bar,.healthbar,.hp-bar,.hpbar,.bar.hp,.bar.health')){
+        const health=bossHealthFromBar(bar);
+        if(health)matches.push({health,score:(identifiesBoss?100:0)+(health.current!==null&&health.max!==null?20:0)});
+      }
+    }
+    matches.sort((a,b)=>b.score-a.score);
+    return matches[0]?.health||readCanvasBossHealth();
+  }
+  // En Baiak Idle el HUD del boss se pinta dentro de #arena canvas. La barra
+  // ocupa el área central superior (igual en todas las resoluciones porque el
+  // canvas conserva su ratio); se mide el tramo rojo relleno, no se hace OCR.
+  function readCanvasBossHealth(){
+    try{
+      const canvas=document.querySelector('#arena canvas');
+      if(!canvas||!canvas.width||!canvas.height){bossHealthReadInfo='No encontré el canvas de la arena.';return null;}
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});
+      if(!ctx){bossHealthReadInfo='No se pudo abrir el contexto del canvas.';return null;}
+      const w=canvas.width,h=canvas.height;
+      const left=Math.round(w*.295),right=Math.round(w*.718);
+      const top=Math.round(h*.068),bottom=Math.round(h*.099);
+      const pixels=ctx.getImageData(left,top,right-left,bottom-top).data;
+      const colCount=right-left,rowCount=bottom-top;
+      let lastFilled=-1,filledColumns=0;
+      for(let x=3;x<colCount-3;x++){
+        let redPixels=0;
+        for(let y=3;y<rowCount-3;y++){
+          const at=(y*colCount+x)*4,r=pixels[at],g=pixels[at+1],b=pixels[at+2];
+          // Rojo del relleno, excluyendo el borde dorado y el fondo oscuro.
+          if(r>40&&r>g*1.12&&r>b*1.10)redPixels++;
+        }
+        if(redPixels>=3){lastFilled=x;filledColumns++;}
+      }
+      // Decoración roja del escenario no alcanza este mínimo dentro del área
+      // fija de la barra; evita reportar vida fuera de un boss activo.
+      bossHealthReadInfo=`Canvas ${w}×${h}; columnas rojas detectadas: ${filledColumns}/${colCount}.`;
+      if(filledColumns<24||lastFilled<0)return null;
+      return {current:null,max:null,percent:Math.max(0,Math.min(100,Math.round((lastFilled+1)*100/(colCount-6)))),text:'Canvas boss health bar',source:'game-canvas'};
+    }catch(error){bossHealthReadError=error?.message||String(error);bossHealthReadInfo=`No se pudo leer el canvas: ${bossHealthReadError}`;return null;}
+  }
+  function bossNoticeSnapshot(){
+    return new Set([...document.querySelectorAll('#log-toasts,.log-toast,#banner-host,.banner,[role="status"],.toast,.notification')].map(el=>bossNorm(el.textContent)).filter(Boolean));
+  }
+  function bossDefeatTextMatches(value,item,previousNotices){
+    const wanted=bossNorm(item?.name);
+    if(!wanted)return false;
+    const text=bossNorm(value);
+    return !previousNotices?.has(text)&&text.includes(wanted)&&/defeated|derrotad|conclu|killed|victory|vitoria/.test(text);
+  }
+  function bossDefeatToastSeen(item,previousNotices){
+    const notices=[...document.querySelectorAll('#log-toasts,.log-toast,#banner-host,.banner,[role="status"],.toast,.notification')];
+    return notices.some(el=>bossDefeatTextMatches(el.textContent,item,previousNotices));
+  }
+  function watchBossDefeat(item,previousNotices){
+    let seen=false;
+    const scan=(records=[])=>{
+      if(bossDefeatToastSeen(item,previousNotices))seen=true;
+      for(const record of records){
+        if(bossDefeatTextMatches(record.target?.textContent,item,previousNotices))seen=true;
+        for(const node of record.addedNodes||[])if(bossDefeatTextMatches(node.textContent,item,previousNotices))seen=true;
+      }
+    };
+    const observer=new MutationObserver(scan);
+    // Captura tanto un toast nuevo como el caso en que el juego reutiliza el
+    // mismo nodo y solo cambia su texto. No depende del poll de 3 segundos.
+    observer.observe(document.body,{subtree:true,childList:true,characterData:true});
+    scan();
+    return {get seen(){return seen;},disconnect(){observer.disconnect();}};
+  }
+  async function bossCompletionConfirmed(item){
+    await openBossPanel();await wait(450);
+    const cell=findBossCell(item),data=cell?bossCellData(cell):null;
+    return !!(data&&(data.completed||data.cooldown));
+  }
+  async function waitForBossCombat(item,previousNotices,defeatWatcher){
+    const started=Date.now(),timeout=12*60*1000;
+    let sawHealth=false,missingHealthChecks=0,announcedWaiting=false;
+    while(Date.now()-started<timeout){
+      await waitWhilePaused();if(ownBossRun.stop)return 'stopped';
+      // Poll the actual combat HUD every three seconds. A catalog card becoming
+      // disabled/locked is deliberately NOT treated as a completed fight.
+      await wait(3000);
+      const health=readBossCombatHealth(item);
+      if(health){
+        sawHealth=true;missingHealthChecks=0;
+        item.health={...health,updatedAt:Date.now(),source:health.source||'game-dom'};
+        ownBossRun.message=`${item.name}: en combate${health.percent!==null?` · vida ${Math.round(health.percent)}%`:''}.`;
+        await persistBossRun();
+        if((health.current!==null&&health.current<=0)||(health.percent!==null&&health.percent<=0)){
+          if(await bossCompletionConfirmed(item))return 'completed';
+        }
+        if((defeatWatcher?.seen||bossDefeatToastSeen(item,previousNotices))&&await bossCompletionConfirmed(item))return 'completed';
+        continue;
+      }
+      if((defeatWatcher?.seen||bossDefeatToastSeen(item,previousNotices))&&await bossCompletionConfirmed(item))return 'completed';
+      if(sawHealth){
+        missingHealthChecks++;
+        item.health={...(item.health||{}),available:false,updatedAt:Date.now(),source:'game-dom'};
+        await persistBossRun();
+        // A disappearing bar is only a hint; completion still needs a live
+        // confirmation in the game's boss catalog.
+        if(missingHealthChecks>=2&&await bossCompletionConfirmed(item))return 'completed';
+      }else if(!announcedWaiting&&Date.now()-started>20000){
+        announcedWaiting=true;
+        ownBossRun.message=`${item.name}: no detecté el aviso HTML de derrota. ${bossHealthReadInfo||'Esperando lectura del canvas.'}`;
+        await persistBossRun();
+      }
+      const pageText=bossNorm(document.body.innerText.slice(-12000));
+      if(/you died|voce morreu|has muerto|derrota|defeat/.test(pageText))return 'defeat';
+    }
+    return 'unverified';
   }
   async function persistBossRun(){
     // Nunca pisar la lista guardada con un array vacío: si no hay una corrida
@@ -1177,39 +1306,42 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     await chrome.storage.local.set(patch);
   }
   async function waitWhilePaused(){while(ownBossRun.pause&&!ownBossRun.stop){ownBossRun.state='paused';await persistBossRun();await wait(300)}if(!ownBossRun.stop)ownBossRun.state='running';}
+  function visibleButtons(){return [...document.querySelectorAll('button,[role="button"],a')].filter(el=>{const r=el.getBoundingClientRect();const st=getComputedStyle(el);return r.width>0&&r.height>0&&st.display!=='none'&&st.visibility!=='hidden'&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'});}
+  function findNormalBossAction(){
+    const excluded=/auto\s*boss|playlist|add|remove|close|fechar|cerrar|cancel|voltar|back/i;
+    const wanted=/fight|battle|enter|start|challenge|attack|lutar|combater|entrar|iniciar|desafiar|atacar|pelear|combatir/i;
+    const scoped=[...document.querySelectorAll('#boss-modal button,#boss-modal [role="button"],#boss-modal a')].filter(el=>{const t=(el.textContent||el.getAttribute('title')||el.getAttribute('data-tip')||'').trim();return wanted.test(t)&&!excluded.test(t)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'});
+    return scoped[0]||visibleButtons().find(el=>{const t=(el.textContent||el.getAttribute('title')||el.getAttribute('data-tip')||'').trim();return wanted.test(t)&&!excluded.test(t)});
+  }
   async function processOwnBoss(item,position){
     await waitWhilePaused(); if(ownBossRun.stop)return 'stopped';
     await openBossPanel(); await wait(350);
     const cell=findBossCell(item);
     if(!cell)return 'error';
     const before=bossCellData(cell);
-    if(before.completed||before.cooldown)return before.completed?'already_completed':'cooldown';
+    if(before.completed)return before.cooldown?'already_completed':'completed';
     item.status=before.levelWarning?'level_warning':'running'; await persistBossRun();
     cell.scrollIntoView({block:'center'});cell.click();await wait(550);
     let action=findNormalBossAction();
     if(!action){cell.click();await wait(450);action=findNormalBossAction();}
     if(!action){
       const afterCell=findBossCell(item),after=afterCell?bossCellData(afterCell):before;
-      if(after.completed||after.cooldown)return after.completed?'already_completed':'cooldown';
-      if(after.levelWarning)return 'rejected';
-      // Sin botón de combate y sin ninguna señal reconocible (ni nivel ni cooldown real):
-      // NO se asume cooldown — eso saltearía un boss que en realidad se puede pelear.
-      // Se marca error para que quede visible y no se pierda silenciosamente.
-      return 'error';
+      if(after.completed)return after.cooldown?'already_completed':'completed';
+      return /level|nivel/i.test(after.status)?'rejected':'error';
     }
     action.click();
     const started=Date.now(),timeout=12*60*1000;
     while(Date.now()-started<timeout){
-      await waitWhilePaused(); if(ownBossRun.stop)return 'stopped';
+      await waitWhilePaused();if(ownBossRun.stop)return 'stopped';
       await wait(1000);
-      const snapCell=findBossCell(item),d=snapCell?bossCellData(snapCell):null;
-      if(d?.completed||d?.cooldown)return 'completed';
+      const snapCell=findBossCell(item),data=snapCell?bossCellData(snapCell):null;
+      if(data?.completed)return 'completed';
       const pageText=bossNorm(document.body.innerText.slice(-12000));
       if(/you died|voce morreu|você morreu|has muerto|derrota|defeat/.test(pageText))return 'defeat';
       if(/victory|boss defeated|boss killed|vitoria|vitória|derrotado|completado/.test(pageText)){
-        await openBossPanel();await wait(500);const verify=findBossCell(item);if(verify&&(bossCellData(verify).completed||bossCellData(verify).cooldown))return 'completed';
+        await openBossPanel();await wait(500);const verify=findBossCell(item);if(verify&&bossCellData(verify).completed)return 'completed';
       }
-      if(!bossModalVisible()&&Date.now()-started>2500){await openBossPanel();await wait(450);const verify=findBossCell(item);if(verify&&(bossCellData(verify).completed||bossCellData(verify).cooldown))return 'completed';}
+      if(!bossModalVisible()&&Date.now()-started>2500){await openBossPanel();await wait(450);const verify=findBossCell(item);if(verify&&bossCellData(verify).completed)return 'completed';}
     }
     return 'error';
   }
@@ -1228,25 +1360,25 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     if(ownBossRun.state==='running'||ownBossRun.state==='paused')throw Error('El Auto Boss ya está en ejecución.');
     await refreshBossCatalogSilently(true);
     const current=readBossSnapshot().bosses;
-    ownBossRun={state:'running',index:0,total:queue.length,current:'',queue:queue.map(x=>{const live=current.find(b=>(x.id&&b.id===x.id)||bossNorm(b.name)===bossNorm(x.name));return {...x,status:live?.completed?'already_completed':live?.cooldown?'cooldown':'pending'};}),stop:false,pause:false,message:'',startedAt:Date.now()};await persistBossRun();
+    ownBossRun={state:'running',index:0,total:queue.length,current:'',queue:queue.map(x=>{const live=current.find(b=>(x.id&&b.id===x.id)||bossNorm(b.name)===bossNorm(x.name));return {...x,status:live?.completed?'already_completed':'pending'};}),stop:false,pause:false,message:'',startedAt:Date.now()};await persistBossRun();
     const tally={};
     const tallyOf=v=>tally[v]=(tally[v]||0)+1;
     try{
       for(let i=0;i<ownBossRun.queue.length;i++){
         if(ownBossRun.stop)break;await waitWhilePaused();if(ownBossRun.stop)break;
         const item=ownBossRun.queue[i];ownBossRun.index=i+1;ownBossRun.current=item.name;
-        if(item.status==='already_completed'||item.status==='cooldown'){
+        if(item.status==='already_completed'){
           tallyOf(item.status);
-          ownBossRun.message=`${item.name}: ${item.status==='cooldown'?'en cooldown':'ya completado'}. Pasando al siguiente boss disponible…`;
+          ownBossRun.message=`${item.name}: ya completado. Pasando al siguiente boss disponible…`;
           await persistBossRun();await wait(250);continue;
         }
         await openBossPanel();await wait(250);const live=findBossCell(item);
         if(live){
           const liveData=bossCellData(live);
-          if(liveData.completed||liveData.cooldown){
-            item.status=liveData.completed?'already_completed':'cooldown';
+          if(liveData.completed){
+            item.status='already_completed';
             tallyOf(item.status);
-            ownBossRun.message=`${item.name}: ${liveData.cooldown?'en cooldown':'ya completado'}. Pasando al siguiente boss disponible…`;
+            ownBossRun.message=`${item.name}: ya completado. Pasando al siguiente boss disponible…`;
             await persistBossRun();await wait(250);continue;
           }
         }
@@ -1271,7 +1403,7 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
         try{ await closeBossPanel(); huntName=await goToRecommendedHunt(); }catch(_){ }
         ownBossRun.message=(huntName?`Lista finalizada. Volviendo a ${huntName}.`:'Lista finalizada.')+summary;
       } else {
-        ownBossRun.message='Auto Boss detenido.'+summary;
+        ownBossRun.message=(ownBossRun.message||'Auto Boss detenido.')+summary;
       }
       await persistBossRun();
     }catch(e){ownBossRun.state='stopped';ownBossRun.message=e.message;await persistBossRun();}
