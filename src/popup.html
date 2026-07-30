@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Baiak Compass</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">✦</div>
+      <div><h1>Baiak Compass</h1><p>HUNT INTELLIGENCE</p></div>
+    </div>
+    <nav class="tabs" aria-label="Navegación principal">
+      <button class="active" data-tab="advisor"><span class="nav-icon">⌂</span><span data-i18n="tabAdvisor">Advisor</span></button>
+      <button data-tab="hunts"><span class="nav-icon">♜</span><span data-i18n="tabHunts">Hunts</span></button>
+      <button data-tab="party"><span class="nav-icon">♟</span><span data-i18n="tabParty">Party</span></button>
+      <button data-tab="analytics"><span class="nav-icon">▥</span><span data-i18n="tabAnalytics">Analytics</span></button>
+      <button data-tab="auto"><span class="nav-icon">⚙</span><span data-i18n="tabAuto">Stamina</span></button>
+    </nav>
+    <div class="sync-box"><span class="sync-dot"></span><div><b>Auto Sync</b><small id="syncText">Actualización automática</small></div></div>
+    <div class="version">BAIAK COMPASS <b>v0.4.3</b></div>
+  </aside>
+
+  <section class="workspace">
+    <header class="topbar">
+      <div class="live-status"><span id="connection" class="online-dot"><i></i><b>...</b></span><div><small>HUNT ACTUAL</small><strong id="currentHuntTop">—</strong></div></div>
+      <div id="language" class="language-dropdown" aria-label="Idioma">
+        <button id="languageTrigger" class="language-trigger" type="button" aria-haspopup="true" aria-expanded="false">
+          <span id="currentFlag" class="flag flag-es"></span><b id="currentLanguageCode">ES</b><span class="chevron">⌄</span>
+        </button>
+        <div id="languageMenu" class="language-menu" role="menu">
+          <button type="button" data-lang="es" role="menuitem"><span class="flag flag-es"></span><span>Español</span><b>ES</b></button>
+          <button type="button" data-lang="pt" role="menuitem"><span class="flag flag-br"></span><span>Português</span><b>PT</b></button>
+          <button type="button" data-lang="en" role="menuitem"><span class="flag flag-us"></span><span>English</span><b>EN</b></button>
+        </div>
+      </div>
+    </header>
+
+    <section id="advisor" class="page active">
+      <div class="page-heading"><div><small>RECOMENDACIONES</small><h2>Advisor</h2></div><button id="analyze" class="refresh" data-i18n="recalculate">↻ Recalcular</button></div>
+      <div class="hero-grid three advisor-recommendations">
+        <article class="hero xp">
+          <div class="hero-top"><small data-i18n="bestProgression">MEJOR PROGRESIÓN</small><span class="recommendation-tag">RECOMENDADO</span></div>
+          <div class="hero-main"><div id="bestXpIcon" class="hero-icon">⚡</div><div class="hero-copy"><h3 id="bestXpName">—</h3><strong id="bestXpValue">—</strong><span id="bestXpSource" class="metric-source estimated">Estimada</span><p id="bestXpLevel">—</p></div><button id="goBestXp" data-i18n="go">IR →</button></div>
+        </article>
+        <article class="hero gold">
+          <div class="hero-top"><small data-i18n="bestGold">MEJOR GOLD</small><span class="recommendation-tag">RECOMENDADO</span></div>
+          <div class="hero-main"><div id="bestGoldIcon" class="hero-icon">◆</div><div class="hero-copy"><h3 id="bestGoldName">—</h3><strong id="bestGoldValue">—</strong><span id="bestGoldSource" class="metric-source estimated">Estimada</span><p id="bestGoldLevel">—</p></div><button id="goBestGold" data-i18n="go">IR →</button></div>
+        </article>
+        <article class="hero danger">
+          <div class="hero-top"><small data-i18n="hardChallenge">MÁS PELIGROSA</small><span class="recommendation-tag warning">PRECAUCIÓN</span></div>
+          <div class="hero-main"><div id="hardIcon" class="hero-icon">☠</div><div class="hero-copy"><h3 id="hardName">—</h3><strong id="hardXp">—</strong><span id="hardSource" class="metric-source estimated">Estimada</span><p><span id="hardRisk">—</span> · <span id="hardLevel">—</span></p></div><button id="goHard" data-i18n="go">IR →</button></div>
+        </article>
+      </div>
+
+      <div class="metrics-row redesigned-metrics">
+        <article class="card measurement measurement-pro">
+          <div class="measurement-header">
+            <div class="measure-hunt-block">
+              <img id="measureLogo" class="hunt-logo hidden" alt="">
+              <div><small data-i18n="realMeasurement">◎ MEDICIÓN REAL</small><h3 id="measureHunt">—</h3></div>
+            </div>
+            <div class="measure-timer"><span>Tiempo</span><b id="measureTime">00:00 / 05:00</b></div>
+            <span id="measureState" class="pill">—</span>
+          </div>
+          <div class="progress"><i id="measureBar"></i></div>
+
+          <div class="primary-metrics">
+            <div class="primary-metric base"><span>XP esperada/h (base)</span><b id="measureEstimate">—</b><small>Estimación original de la hunt</small></div>
+            <div class="primary-metric xp-real"><span>XP real/h</span><b id="measureProjection">—</b><small id="measureDiff" class="difference">—</small></div>
+            <div class="primary-metric gold-real"><span>Gold real/h</span><b id="measureGoldProjection">—</b><small id="measureGoldDiff" class="difference">—</small></div>
+          </div>
+
+          <div class="current-measure-title">MEDICIÓN ACTUAL (5 MINUTOS)</div>
+          <div class="current-metrics">
+            <div class="measure-box metric-xp"><span><i class="measure-icon" aria-hidden="true">☆</i>XP Gain (5m)</span><b id="measureXp">—</b><small>Solo XP Gain del juego</small></div>
+            <div class="measure-box metric-stack"><span><i class="measure-icon" aria-hidden="true">▱</i>XP Stack</span><b id="measureStack">—</b><small>Continúa acumulando</small></div>
+            <div class="measure-box metric-total"><span><i class="measure-icon" aria-hidden="true">↗</i>XP Gain acumulado</span><b id="measureGainTotal">—</b><small>Continúa acumulando</small><em id="measureGainTime" class="gain-time">◷ 00m</em></div>
+            <div class="measure-box metric-gold"><span><i class="measure-icon" aria-hidden="true">●</i>Gold ganado (5m)</span><b id="measureGold">—</b><small>Loot del Hunt Analyzer</small></div>
+            <div class="measure-box metric-profit"><span><i class="measure-icon" aria-hidden="true">◆</i>Profit (5m)</span><b id="measureProfit">—</b><small>Balance del Hunt Analyzer</small></div>
+          </div>
+
+          <div class="secondary-strip">
+            <div><span>Gold estimado/h</span><b id="measureGoldEstimate">—</b></div>
+            <div><span>XP esperada (5m)</span><b id="measureExpected">—</b></div>
+            <div><span>Supplies (5m)</span><b id="measureSupplies">—</b></div>
+            <div><span>Promedio</span><b id="measureLast">—</b></div>
+          </div>
+        </article>
+
+        <article class="card chart-card chart-pro"><div class="section-title"><div><small>XP/H EN VIVO</small><h3>Rendimiento en tiempo real</h3></div><span id="chartNow" class="pill">—</span></div><div id="xpChart" class="xp-chart"><div class="chart-empty">Esperando datos de XP…</div></div><div class="chart-legend"><span><i class="actual"></i>XP obtenida</span><span><i class="estimate"></i>Estimación base</span></div></article>
+      </div>
+
+      <article class="card"><div class="section-title"><div><small>TOP 5</small><h3 data-i18n="bestHunts">Mejores hunts</h3></div><div class="segments"><button class="active" data-objective="xp">XP</button><button data-objective="gold">GOLD</button><button data-objective="balance">BALANCE</button></div></div><div id="topFive" class="ranking empty">...</div></article>
+      <article class="card search-card"><div class="section-title"><div><small data-i18n="globalSearch">BUSCADOR GLOBAL</small><h3 data-i18n="allHunts">Todas las hunts</h3></div></div><div class="search"><span>⌕</span><input id="search"></div><div id="suggestions" class="suggestions"></div><div id="huntPreview"></div><p id="analysisMsg" class="msg"></p></article>
+    </section>
+
+    <section id="hunts" class="page"><div class="page-heading"><div><small data-i18n="catalog">CATÁLOGO</small><h2 data-i18n="fullHuntList">Lista completa de hunts</h2></div><span id="huntCount" class="pill">0</span></div><article class="card"><div class="search"><span>⌕</span><input id="huntFilter"></div><div id="allHunts" class="all-hunts empty">—</div></article></section>
+    <section id="party" class="page"><div class="page-heading"><div><small>PARTY</small><h2 data-i18n="detectedCharacters">Personajes detectados</h2></div><button id="refreshParty" class="refresh" data-i18n="refresh">↻ Actualizar</button></div><article class="card"><div id="partySummary" class="party-summary"></div><div id="partyCards" class="party-list empty">—</div></article></section>
+    <section id="analytics" class="page"><div class="page-heading"><div><small data-i18n="realResults">RESULTADOS REALES</small><h2>Analytics detallado</h2></div><span id="sessionCount" class="pill">0</span></div><div id="analyticsSummary" class="analytics-summary"></div><article class="card"><div class="section-title"><div><small>HISTORIAL</small><h3 data-i18n="fiveMinuteHistory">Mediciones de 5 minutos</h3></div></div><div id="history" class="history empty">—</div></article></section>
+    <section id="auto" class="page"><div class="page-heading"><div><small>STAMINA</small><h2>Stamina</h2></div><label class="switch"><input id="staminaEnabled" type="checkbox"><span></span></label></div><article class="card auto-head"><p id="status">—</p></article><article class="card form"><div class="two"><label><span data-i18n="enterTraining">Ir a Training</span><input id="enterAt" type="number" min="1" max="99"><small data-i18n="percentOrLess">% o menos</small></label><label><span data-i18n="leaveTraining">Salir de Training</span><input id="returnAt" type="number" min="1" max="100"><small data-i18n="percentOrMore">% o más</small></label></div><label><span data-i18n="afterRecharge">Después de recargar</span><select id="returnMode"><option value="recommended" data-i18n="recommendedHunt">Ir a la hunt recomendada</option><option value="previous" data-i18n="previousHunt">Volver a la anterior</option><option value="notify" data-i18n="notifyOnly">Solo notificar</option></select></label><label><span data-i18n="minimumImprovement">Mejora mínima</span><input id="minImprovement" type="number" min="0" max="50"><small>%</small></label><label><span data-i18n="checkEvery">Revisar cada</span><input id="intervalSeconds" type="number" min="3" max="300"><small data-i18n="seconds">segundos</small></label><div class="button-row"><button id="save" class="primary" data-i18n="saveConfig">Guardar configuración</button><button id="testNow" class="secondary" data-i18n="checkNow">Comprobar ahora</button></div><p id="staminaMsg" class="msg"></p></article></section>
+
+    <select id="settingsLanguage" hidden><option value="es">ES</option><option value="pt">PT</option><option value="en">EN</option></select>
+    <footer data-i18n="footer">Las hunts se cargan automáticamente. Las estimaciones base nunca se reemplazan por las mediciones.</footer>
+  </section>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

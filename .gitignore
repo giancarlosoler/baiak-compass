@@ -1,0 +1,14 @@
+# System and local editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local configuration and credentials
+.env
+.env.*
+*.pem
+*.key
+
+# Logs and dependency folders
+*.log
+node_modules/
