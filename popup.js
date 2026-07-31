@@ -381,21 +381,30 @@ function renderBosses(){
  // El estado mostrado en "Lista propia" se calcula contra el catálogo detectado en vivo
  // (liveByName, leído recién del DOM real del juego), no contra una corrida vieja: así
  // "Cooldown" siempre refleja lo que el juego muestra ahora, no un dato archivado.
- $('bossQueueList').classList.toggle('empty',!bossQueue.length);
- $('bossQueueList').innerHTML=bossQueue.map((b,i)=>{
-   let dispStatus=b.status||'pending';
-   if(dispStatus!=='running'){
-     const live=liveByName.get(norm(b.name));
-     if(live){
-       if(live.completed)dispStatus='already_completed';
-       else if(live.cooldown)dispStatus='cooldown';
-       else if(live.ready)dispStatus='pending';
-     }
+  $('bossQueueList').classList.toggle('empty',!bossQueue.length);
+  const runActive=run.state==='running'||run.state==='paused';
+  const namedQueueIndex=run.current?bossQueue.findIndex(b=>norm(b.name)===norm(run.current)):-1;
+  const currentQueueIndex=namedQueueIndex>=0?namedQueueIndex:Number(run.index||0)-1;
+  $('bossQueueList').innerHTML=bossQueue.map((b,i)=>{
+    let dispStatus=b.status||'pending';
+    // Al llegar al boss N, los anteriores ya terminaron: victoria y derrota
+    // consumen la misma entrada. Esto evita que una lectura atrasada del panel
+    // los vuelva a pintar como pendientes.
+    if(runActive&&currentQueueIndex>=0){
+      if(i<currentQueueIndex)dispStatus='already_completed';
+      else if(i===currentQueueIndex)dispStatus='running';
+    }
+    // El catálogo del juego puede confirmar un pendiente, pero jamás debe
+    // degradar un resultado que ya confirmó la propia ejecución.
+    if(dispStatus==='pending'){
+      const live=liveByName.get(norm(b.name));
+      if(live){
+        if(live.completed)dispStatus='already_completed';
+        else if(live.cooldown)dispStatus='cooldown';
+      }
    }
-    const health=b.health||{};
-    const hpPct=Number.isFinite(Number(health.percent))?Math.max(0,Math.min(100,Number(health.percent))):null;
-    const hpText=hpPct!==null?(health.current!==null&&health.current!==undefined&&health.max?`Vida: ${fmtFull(health.current)} / ${fmtFull(health.max)} (${Math.round(hpPct)}%)`:`Vida del boss: ${Math.round(hpPct)}%`):(dispStatus==='running'?'Leyendo vida real del juego…':'Vida disponible al iniciar el combate');
-    return `<div class="boss-queue-item" draggable="true" data-queue-index="${i}"><span>${i+1}</span><div class="boss-queue-copy"><b>${esc(b.name)}</b><small>${bossCategoryLabel(b.category)} · <em class="boss-result-${esc(dispStatus)}">${bossResultLabel(dispStatus)}</em></small></div><div class="queue-controls"><button class="boss-move" data-up="${i}" title="Subir">↑</button><button class="boss-move" data-down="${i}" title="Bajar">↓</button><button class="boss-remove" data-remove="${i}" title="Quitar">✕</button></div><div class="boss-queue-health ${hpPct!==null?'known':'waiting'}"><i style="width:${hpPct??0}%"></i></div><small class="boss-queue-health-label">${esc(hpText)}</small></div>`;
+     // La cola no representa vida: su estado se decide por el aviso de derrota.
+     return `<div class="boss-queue-item" draggable="true" data-queue-index="${i}"><span>${i+1}</span><div class="boss-queue-copy"><b>${esc(b.name)}</b><small>${bossCategoryLabel(b.category)} · <em class="boss-result-${esc(dispStatus)}">${bossResultLabel(dispStatus)}</em></small></div><div class="queue-controls"><button class="boss-move" data-up="${i}" title="Subir">↑</button><button class="boss-move" data-down="${i}" title="Bajar">↓</button><button class="boss-remove" data-remove="${i}" title="Quitar">✕</button></div></div>`;
  }).join('')||'Agrega bosses desde el panel izquierdo.';
  document.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{bossQueue.splice(Number(b.dataset.remove),1);await saveBossQueue();renderBosses()});
  document.querySelectorAll('[data-up]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.up);if(i>0){[bossQueue[i-1],bossQueue[i]]=[bossQueue[i],bossQueue[i-1]];await saveBossQueue();renderBosses()}});

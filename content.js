@@ -1,7 +1,7 @@
 if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
   globalThis.__BAIAK_ANALYZER_LOADED__ = true;
 (() => {
-  const CONTENT_SCRIPT_VERSION='0.8.0-boss-hp';
+  const CONTENT_SCRIPT_VERSION='0.8.1-boss-defeat-only';
   const DEFAULTS = {
     staminaEnabled: false,
     enterAt: 20,
@@ -1232,11 +1232,29 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     const wanted=bossNorm(item?.name);
     if(!wanted)return false;
     const text=bossNorm(value);
-    return !previousNotices?.has(text)&&text.includes(wanted)&&/defeated|derrotad|conclu|killed|victory|vitoria/.test(text);
+    if(previousNotices?.has(text)||!text.includes(wanted))return false;
+    // Los dos resultados consumen el intento diario y activan el cooldown:
+    // "Boss defeated!" y "You fell to Boss." deben avanzar la misma cola.
+    return /defeated|derrotad|conclu|killed|victory|vitoria/.test(text)||/you fell to/.test(text);
   }
   function bossDefeatToastSeen(item,previousNotices){
     const notices=[...document.querySelectorAll('#log-toasts,.log-toast,#banner-host,.banner,[role="status"],.toast,.notification')];
     return notices.some(el=>bossDefeatTextMatches(el.textContent,item,previousNotices));
+  }
+  function markBossCompletedInCache(item){
+    const name=bossNorm(item?.name);
+    if(!name)return;
+    const cached=(bossCache.bosses||[]).find(b=>bossNorm(b.name)===name);
+    if(cached){
+      cached.completed=true;
+      cached.cooldown=true;
+      cached.ready=false;
+      cached.status='Ya completado';
+    }else{
+      bossCache.bosses.push({...item,completed:true,cooldown:true,ready:false,status:'Ya completado'});
+    }
+    bossCache.updatedAt=Date.now();
+    chrome.storage.local.set({bossCatalogCache:bossCache}).catch(()=>{});
   }
   function watchBossDefeat(item,previousNotices){
     let seen=false;
@@ -1254,46 +1272,20 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     scan();
     return {get seen(){return seen;},disconnect(){observer.disconnect();}};
   }
-  async function bossCompletionConfirmed(item){
-    await openBossPanel();await wait(450);
-    const cell=findBossCell(item),data=cell?bossCellData(cell):null;
-    return !!(data&&(data.completed||data.cooldown));
-  }
   async function waitForBossCombat(item,previousNotices,defeatWatcher){
     const started=Date.now(),timeout=12*60*1000;
-    let sawHealth=false,missingHealthChecks=0,announcedWaiting=false;
+    let announcedWaiting=false;
     while(Date.now()-started<timeout){
       await waitWhilePaused();if(ownBossRun.stop)return 'stopped';
-      // Poll the actual combat HUD every three seconds. A catalog card becoming
-      // disabled/locked is deliberately NOT treated as a completed fight.
-      await wait(3000);
-      const health=readBossCombatHealth(item);
-      if(health){
-        sawHealth=true;missingHealthChecks=0;
-        item.health={...health,updatedAt:Date.now(),source:health.source||'game-dom'};
-        ownBossRun.message=`${item.name}: en combate${health.percent!==null?` · vida ${Math.round(health.percent)}%`:''}.`;
-        await persistBossRun();
-        if((health.current!==null&&health.current<=0)||(health.percent!==null&&health.percent<=0)){
-          if(await bossCompletionConfirmed(item))return 'completed';
-        }
-        if((defeatWatcher?.seen||bossDefeatToastSeen(item,previousNotices))&&await bossCompletionConfirmed(item))return 'completed';
-        continue;
-      }
-      if((defeatWatcher?.seen||bossDefeatToastSeen(item,previousNotices))&&await bossCompletionConfirmed(item))return 'completed';
-      if(sawHealth){
-        missingHealthChecks++;
-        item.health={...(item.health||{}),available:false,updatedAt:Date.now(),source:'game-dom'};
-        await persistBossRun();
-        // A disappearing bar is only a hint; completion still needs a live
-        // confirmation in the game's boss catalog.
-        if(missingHealthChecks>=2&&await bossCompletionConfirmed(item))return 'completed';
-      }else if(!announcedWaiting&&Date.now()-started>20000){
+      // El único criterio es el mensaje de derrota. No leemos la barra canvas:
+      // no es fiable y no interviene en el avance de la cola.
+      await wait(1000);
+      if(defeatWatcher?.seen||bossDefeatToastSeen(item,previousNotices))return 'completed';
+      if(!announcedWaiting&&Date.now()-started>20000){
         announcedWaiting=true;
-        ownBossRun.message=`${item.name}: no detecté el aviso HTML de derrota. ${bossHealthReadInfo||'Esperando lectura del canvas.'}`;
+        ownBossRun.message=`${item.name}: en combate; esperando el aviso "${item.name} defeated!" del juego.`;
         await persistBossRun();
       }
-      const pageText=bossNorm(document.body.innerText.slice(-12000));
-      if(/you died|voce morreu|has muerto|derrota|defeat/.test(pageText))return 'defeat';
     }
     return 'unverified';
   }
@@ -1306,13 +1298,6 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     await chrome.storage.local.set(patch);
   }
   async function waitWhilePaused(){while(ownBossRun.pause&&!ownBossRun.stop){ownBossRun.state='paused';await persistBossRun();await wait(300)}if(!ownBossRun.stop)ownBossRun.state='running';}
-  function visibleButtons(){return [...document.querySelectorAll('button,[role="button"],a')].filter(el=>{const r=el.getBoundingClientRect();const st=getComputedStyle(el);return r.width>0&&r.height>0&&st.display!=='none'&&st.visibility!=='hidden'&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'});}
-  function findNormalBossAction(){
-    const excluded=/auto\s*boss|playlist|add|remove|close|fechar|cerrar|cancel|voltar|back/i;
-    const wanted=/fight|battle|enter|start|challenge|attack|lutar|combater|entrar|iniciar|desafiar|atacar|pelear|combatir/i;
-    const scoped=[...document.querySelectorAll('#boss-modal button,#boss-modal [role="button"],#boss-modal a')].filter(el=>{const t=(el.textContent||el.getAttribute('title')||el.getAttribute('data-tip')||'').trim();return wanted.test(t)&&!excluded.test(t)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'});
-    return scoped[0]||visibleButtons().find(el=>{const t=(el.textContent||el.getAttribute('title')||el.getAttribute('data-tip')||'').trim();return wanted.test(t)&&!excluded.test(t)});
-  }
   async function processOwnBoss(item,position){
     await waitWhilePaused(); if(ownBossRun.stop)return 'stopped';
     await openBossPanel(); await wait(350);
@@ -1321,29 +1306,16 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     const before=bossCellData(cell);
     if(before.completed)return before.cooldown?'already_completed':'completed';
     item.status=before.levelWarning?'level_warning':'running'; await persistBossRun();
-    cell.scrollIntoView({block:'center'});cell.click();await wait(550);
-    let action=findNormalBossAction();
-    if(!action){cell.click();await wait(450);action=findNormalBossAction();}
-    if(!action){
-      const afterCell=findBossCell(item),after=afterCell?bossCellData(afterCell):before;
-      if(after.completed)return after.cooldown?'already_completed':'completed';
-      return /level|nivel/i.test(after.status)?'rejected':'error';
-    }
-    action.click();
-    const started=Date.now(),timeout=12*60*1000;
-    while(Date.now()-started<timeout){
-      await waitWhilePaused();if(ownBossRun.stop)return 'stopped';
-      await wait(1000);
-      const snapCell=findBossCell(item),data=snapCell?bossCellData(snapCell):null;
-      if(data?.completed)return 'completed';
-      const pageText=bossNorm(document.body.innerText.slice(-12000));
-      if(/you died|voce morreu|você morreu|has muerto|derrota|defeat/.test(pageText))return 'defeat';
-      if(/victory|boss defeated|boss killed|vitoria|vitória|derrotado|completado/.test(pageText)){
-        await openBossPanel();await wait(500);const verify=findBossCell(item);if(verify&&bossCellData(verify).completed)return 'completed';
-      }
-      if(!bossModalVisible()&&Date.now()-started>2500){await openBossPanel();await wait(450);const verify=findBossCell(item);if(verify&&bossCellData(verify).completed)return 'completed';}
-    }
-    return 'error';
+    const previousNotices=bossNoticeSnapshot();
+    const defeatWatcher=watchBossDefeat(item,previousNotices);
+    try{
+      // Elegir la tarjeta transporta al personaje y comienza la pelea. No hay
+      // un segundo botón de combate que la extensión deba buscar o pulsar.
+      cell.scrollIntoView({block:'center'});cell.click();
+      ownBossRun.message=`${item.name}: en combate; esperando el aviso "${item.name} defeated!" del juego.`;
+      await persistBossRun();
+      return await waitForBossCombat(item,previousNotices,defeatWatcher);
+    }finally{defeatWatcher.disconnect();}
   }
   // Al terminar la lista de Auto Boss (manual o disparada por la alarma diaria),
   // manda al personaje a la hunt mejor rankeada según la configuración actual.
@@ -1360,7 +1332,13 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
     if(ownBossRun.state==='running'||ownBossRun.state==='paused')throw Error('El Auto Boss ya está en ejecución.');
     await refreshBossCatalogSilently(true);
     const current=readBossSnapshot().bosses;
-    ownBossRun={state:'running',index:0,total:queue.length,current:'',queue:queue.map(x=>{const live=current.find(b=>(x.id&&b.id===x.id)||bossNorm(b.name)===bossNorm(x.name));return {...x,status:live?.completed?'already_completed':'pending'};}),stop:false,pause:false,message:'',startedAt:Date.now()};await persistBossRun();
+    ownBossRun={state:'running',index:0,total:queue.length,current:'',queue:queue.map(x=>{
+      const live=current.find(b=>(x.id&&b.id===x.id)||bossNorm(b.name)===bossNorm(x.name));
+      const alreadyDone=['completed','already_completed','cooldown'].includes(x.status);
+      // Conserva el resultado guardado y también respeta lo que el panel vivo
+      // confirma. Así se salta de inmediato hasta el primer boss pendiente.
+      return {...x,status:(live?.completed||live?.cooldown||alreadyDone)?'already_completed':'pending'};
+    }),stop:false,pause:false,message:'',startedAt:Date.now()};await persistBossRun();
     const tally={};
     const tallyOf=v=>tally[v]=(tally[v]||0)+1;
     try{
@@ -1386,6 +1364,16 @@ if (!globalThis.__BAIAK_ANALYZER_LOADED__) {
         let result='error';try{result=await processOwnBoss(item,i)}catch(e){result='error';ownBossRun.message=e.message}
         if(result==='stopped')break;
         item.status=result;tallyOf(result);
+        if(result==='completed')markBossCompletedInCache(item);
+        // No se permite seguir a ciegas. El siguiente boss solo puede empezar
+        // cuando este fue confirmado como completado (o ya estaba en cooldown).
+        if(!['completed','already_completed','cooldown'].includes(result)){
+          ownBossRun.stop=true;
+          ownBossRun.state='stopped';
+          ownBossRun.message=`Auto Boss detenido en ${item.name}: ${result==='defeat'?'el personaje murió':'no se confirmó "'+item.name+' defeated!"'}. No se inició el siguiente boss.`;
+          await persistBossRun();
+          break;
+        }
         if(result==='cooldown'||result==='already_completed') ownBossRun.message=`${item.name}: ${result==='cooldown'?'en cooldown':'ya completado'}. Pasando al siguiente boss disponible…`;
         await persistBossRun();await wait(700);
       }
